@@ -20,8 +20,8 @@ use wayland_client::{
     Connection, QueueHandle,
 };
 
-use crate::draw::render_stroke;
-use crate::types::{Point, Rect, Stroke};
+use crate::draw::render_shape;
+use crate::types::{Point, Rect, Shape, Tool};
 
 pub struct AppState {
     pub registry_state: RegistryState,
@@ -37,9 +37,11 @@ pub struct AppState {
     pub layer: LayerSurface,
     pub keyboard: Option<wl_keyboard::WlKeyboard>,
     pub keyboard_focus: bool,
+    pub modifiers: Modifiers,
     pub pointer: Option<wl_pointer::WlPointer>,
 
-    pub active_stroke: Option<Stroke>,
+    pub current_tool: Tool,
+    pub active_shape: Option<Shape>,
 
     pub completed_canvas: tiny_skia::Pixmap,
     pub last_active_stroke_rect: Option<Rect>,
@@ -249,8 +251,15 @@ impl KeyboardHandler for AppState {
         _: u32,
         event: KeyEvent,
     ) {
+        let is_ctrl = self.modifiers.ctrl;
         if event.keysym == Keysym::Escape {
             self.exit = true;
+        } else if is_ctrl && event.keysym == Keysym::_1 {
+            self.current_tool = Tool::Rectangle;
+        } else if is_ctrl && event.keysym == Keysym::_2 {
+            self.current_tool = Tool::Arrow;
+        } else if is_ctrl && event.keysym == Keysym::_3 {
+            self.current_tool = Tool::Freehand;
         }
     }
 
@@ -280,10 +289,11 @@ impl KeyboardHandler for AppState {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _serial: u32,
-        _modifiers: Modifiers,
+        modifiers: Modifiers,
         _raw_modifiers: RawModifiers,
         _layout: u32,
     ) {
+        self.modifiers = modifiers;
     }
 }
 
@@ -305,10 +315,10 @@ impl PointerHandler for AppState {
             match event.kind {
                 Enter { .. } => log::debug!("Pointer entered"),
                 Leave { .. } => {
-                    if let Some(stroke) = self.active_stroke.take() {
-                        if let Some(bounds) = stroke.bounding_box() {
+                    if let Some(shape) = self.active_shape.take() {
+                        if let Some(bounds) = shape.bounding_box() {
                             // Bake into completed canvas
-                            render_stroke(&mut self.completed_canvas.as_mut(), &stroke);
+                            render_shape(&mut self.completed_canvas.as_mut(), &shape);
                             self.pending_damage = match &self.pending_damage {
                                 Some(d) => Some(d.union(&bounds)),
                                 None => Some(bounds),
@@ -318,34 +328,60 @@ impl PointerHandler for AppState {
                     }
                 }
                 Motion { .. } => {
-                    if let Some(stroke) = &mut self.active_stroke {
-                        stroke.points.push(Point {
+                    if let Some(shape) = &mut self.active_shape {
+                        let current_point = Point {
                             x: event.position.0 as f32,
                             y: event.position.1 as f32,
-                        });
+                        };
+                        match shape {
+                            Shape::Freehand { points, .. } => {
+                                points.push(current_point);
+                            }
+                            Shape::Rectangle { end, .. } => {
+                                *end = current_point;
+                            }
+                            Shape::Arrow { end, .. } => {
+                                *end = current_point;
+                            }
+                        }
                         needs_redraw = true;
                     }
                 }
                 Press { button, .. } => {
                     if button == 272 {
-                        let stroke = Stroke {
-                            points: vec![Point {
-                                x: event.position.0 as f32,
-                                y: event.position.1 as f32,
-                            }],
-                            color: tiny_skia::Color::from_rgba8(255, 0, 0, 255),
-                            thickness: 4.0,
+                        let start_point = Point {
+                            x: event.position.0 as f32,
+                            y: event.position.1 as f32,
                         };
-                        self.active_stroke = Some(stroke);
+                        let shape = match self.current_tool {
+                            Tool::Rectangle => Shape::Rectangle {
+                                start: start_point.clone(),
+                                end: start_point,
+                                color: tiny_skia::Color::from_rgba8(255, 0, 0, 255),
+                                thickness: 4.0,
+                            },
+                            Tool::Arrow => Shape::Arrow {
+                                start: start_point.clone(),
+                                end: start_point,
+                                color: tiny_skia::Color::from_rgba8(255, 0, 0, 255),
+                                thickness: 4.0,
+                            },
+                            Tool::Freehand => Shape::Freehand {
+                                points: vec![start_point],
+                                color: tiny_skia::Color::from_rgba8(255, 0, 0, 255),
+                                thickness: 4.0,
+                            },
+                        };
+                        self.active_shape = Some(shape);
                         needs_redraw = true;
                     }
                 }
                 Release { button, .. } => {
                     if button == 272 {
-                        if let Some(stroke) = self.active_stroke.take() {
-                            if let Some(bounds) = stroke.bounding_box() {
+                        if let Some(shape) = self.active_shape.take() {
+                            if let Some(bounds) = shape.bounding_box() {
                                 // Bake into completed canvas
-                                render_stroke(&mut self.completed_canvas.as_mut(), &stroke);
+                                render_shape(&mut self.completed_canvas.as_mut(), &shape);
                                 self.pending_damage = match &self.pending_damage {
                                     Some(d) => Some(d.union(&bounds)),
                                     None => Some(bounds),
@@ -402,7 +438,7 @@ impl AppState {
         }
 
         // Add current frame's active stroke
-        let current_active_rect = self.active_stroke.as_ref().and_then(|s| s.bounding_box());
+        let current_active_rect = self.active_shape.as_ref().and_then(|s| s.bounding_box());
         if let Some(r) = &current_active_rect {
             dirty_rect = match dirty_rect {
                 Some(d) => Some(d.union(r)),
@@ -443,8 +479,8 @@ impl AppState {
             {
                 let mut pixmap = tiny_skia::PixmapMut::from_bytes(canvas, width, height).unwrap();
                 // 3. Render the active stroke on top (it inherently clips if handled correctly by skia, or it falls within dirty bounds)
-                if let Some(active) = &self.active_stroke {
-                    render_stroke(&mut pixmap, active);
+                if let Some(active) = &self.active_shape {
+                    render_shape(&mut pixmap, active);
                 }
             }
 

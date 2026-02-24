@@ -5,7 +5,7 @@ A lightweight, native Wayland screen annotation and drawing utility designed for
 ## Overview
 
 Sway-Draw acts as a transparent overlay on top of your existing windows, allowing you to quickly draw and annotate directly on your screen. 
-It bypasses heavy UI toolkits like GTK or Qt, instead using pure Wayland protocols (`wlr-layer-shell`) and software rendering (`tiny-skia`) for a fast, minimal, and responsive experience.
+It uses pure Wayland protocols (`wlr-layer-shell`) and software rendering (`tiny-skia`) for a fast, minimal, and responsive experience.
 
 ## Features
 

@@ -72,9 +72,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         layer,
         keyboard: None,
         keyboard_focus: false,
+        modifiers: smithay_client_toolkit::seat::keyboard::Modifiers::default(),
         pointer: None,
 
-        active_stroke: None,
+        current_tool: types::Tool::Rectangle,
+        active_shape: None,
         completed_canvas: tiny_skia::Pixmap::new(1920, 1080).unwrap(),
         last_active_stroke_rect: None,
         pending_damage: Some(Rect {
