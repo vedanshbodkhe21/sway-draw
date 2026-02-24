@@ -1,5 +1,3 @@
-use std::num::NonZeroU32;
-
 use smithay_client_toolkit::{
     compositor::CompositorState,
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
@@ -76,7 +74,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         keyboard_focus: false,
         pointer: None,
 
-        strokes: Vec::new(),
         active_stroke: None,
         completed_canvas: tiny_skia::Pixmap::new(1920, 1080).unwrap(),
         last_active_stroke_rect: None,
@@ -86,6 +83,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             w: 1920,
             h: 1080,
         }),
+        needs_redraw: true,
+        frame_pending: false,
     };
 
     loop {

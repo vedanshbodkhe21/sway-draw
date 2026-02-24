@@ -39,12 +39,13 @@ pub struct AppState {
     pub keyboard_focus: bool,
     pub pointer: Option<wl_pointer::WlPointer>,
 
-    pub strokes: Vec<Stroke>,
     pub active_stroke: Option<Stroke>,
 
     pub completed_canvas: tiny_skia::Pixmap,
     pub last_active_stroke_rect: Option<Rect>,
     pub pending_damage: Option<Rect>,
+    pub needs_redraw: bool,
+    pub frame_pending: bool,
 }
 
 impl CompositorHandler for AppState {
@@ -73,7 +74,10 @@ impl CompositorHandler for AppState {
         _surface: &wl_surface::WlSurface,
         _time: u32,
     ) {
-        self.draw(qh);
+        self.frame_pending = false;
+        if self.needs_redraw {
+            self.draw(qh);
+        }
     }
 
     fn surface_enter(
@@ -156,7 +160,10 @@ impl LayerShellHandler for AppState {
 
         if self.first_configure {
             self.first_configure = false;
-            self.draw(qh);
+            self.needs_redraw = true;
+            if !self.frame_pending {
+                self.draw(qh);
+            }
         }
     }
 }
@@ -307,8 +314,7 @@ impl PointerHandler for AppState {
                                 None => Some(bounds),
                             };
                         }
-                        self.strokes.push(stroke);
-                        needs_redraw = true;
+                        self.needs_redraw = true;
                     }
                 }
                 Motion { .. } => {
@@ -345,8 +351,7 @@ impl PointerHandler for AppState {
                                     None => Some(bounds),
                                 };
                             }
-                            self.strokes.push(stroke);
-                            needs_redraw = true;
+                            self.needs_redraw = true;
                         }
                     }
                 }
@@ -355,7 +360,10 @@ impl PointerHandler for AppState {
         }
 
         if needs_redraw {
-            self.draw(qh);
+            self.needs_redraw = true;
+            if !self.frame_pending {
+                self.draw(qh);
+            }
         }
     }
 }
@@ -455,17 +463,19 @@ impl AppState {
             self.layer
                 .wl_surface()
                 .damage_buffer(dirty.x, dirty.y, dirty.w as i32, dirty.h as i32);
+            self.layer
+                .wl_surface()
+                .frame(qh, self.layer.wl_surface().clone());
+            self.frame_pending = true;
+            buffer
+                .attach_to(self.layer.wl_surface())
+                .expect("buffer attach");
+            self.layer.commit();
+            self.needs_redraw = false;
         } else {
             // Nothing to draw
-            self.layer.wl_surface().damage_buffer(0, 0, 0, 0); // No damage
+            // We just don't commit a new buffer or a new frame callback!
+            // This halts the loop until `needs_redraw` becomes true again.
         }
-
-        self.layer
-            .wl_surface()
-            .frame(qh, self.layer.wl_surface().clone());
-        buffer
-            .attach_to(self.layer.wl_surface())
-            .expect("buffer attach");
-        self.layer.commit();
     }
 }
